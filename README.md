@@ -1,4 +1,4 @@
-# Gemma-3-12B Fine-tuning with Unsloth Stack
+# Gemma-3-12B Fine-tuning
 
 This project implements the "Trinity" architecture for fine-tuning Gemma-3-12B on
 constrained hardware using:
