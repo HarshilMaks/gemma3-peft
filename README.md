@@ -1,96 +1,66 @@
-# Gemma-3-12B Fine-tuning
+# Ghost Architect: Gemma-3-12B Fine-Tuning Project
 
-This project implements the "Trinity" architecture for fine-tuning Gemma-3-12B on
-constrained hardware using:
-- **QLoRA** (4-bit quantization)
-- **DoRA** (Weight-Decomposed Adaptation)
-- **rsLoRA** (Rank-Stabilized LoRA)
+## Overview
+Ghost Architect is a progressive Gemma-3 project:
+- **Phase 1:** Trinity fine-tuning (QLoRA + rsLoRA + DoRA) on Colab T4.
+- **Phase 2:** Multimodal UI-to-SQL specialization.
 
-## Architecture Overview
-
-To maximize reasoning capabilities on constrained hardware, we implement a hybrid
-QDoRA + rsLoRA architecture:
-
-1. **QLoRA (Base)**: Utilized 4-bit NormalFloat (NF4) quantization to compress the
-Gemma-3-12B memory footprint by 60%, allowing it to fit entirely on a single
-Nvidia T4 (16GB) GPU.
-
-2. **rsLoRA (Stability)**: Implemented Rank-Stabilized LoRA to mathematically
-correct the scaling factor, allowing us to scale the adapter Rank to 64. This
-increased the model's capacity to learn complex domain-specific syntax without the
-gradient collapse typical of high-rank standard LoRA.
-
-3. **DoRA (Precision)**: Enabled Weight-Decomposed Adaptation to ensure these
-high-rank updates were applied with directional precision, minimizing the
-quantization error penalty.
-
-## Hardware Requirements
-
-- **Platform**: Google Colab (Free Tier)
-- **Accelerator**: NVIDIA T4 GPU (16GB VRAM)
-- **Memory Usage**: ~15.6GB (Critical usage, nearly 98% of T4 capacity)
-
-## Installation
-
-### Using uv (recommended)
+## Quick Start (uv + Colab T4)
 
 ```bash
-uv pip install unsloth "xformers<0.0.27" "trl<0.9.0" peft accelerate bitsandbytes
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
-## Directory Structure
+Then run the Colab notebook:
+- **`notebooks/main.ipynb`** (single entry notebook for T4 setup + full training config)
 
-```mermaid
-graph TD
-    A[Gemma-3-12B Fine-tuning] --> B[Data Pipeline]
-    A --> C[Model Training]
-    A --> D[Adapter Export]
-    A --> E[Output Deployment]
+## Project Tree
 
-    B --> B1[dataset.json]
-    B --> B2[Data Preprocessing]
-
-    C --> C1[QLoRA 4-bit]
-    C --> C2[DoRA Precision]
-    C --> C3[rsLoRA Stability]
-    C --> C4[Training Loop]
-
-    D --> D1[LoRA Adapters]
-    D --> D2[GGUF Conversion]
-
-    E --> E1[Ollama Ready]
-    E --> E2[Local Inference]
-
-    style A fill:#4CAF50,stroke:#333
-    style B fill:#2196F3,stroke:#333
-    style C fill:#FF9800,stroke:#333
-    style D fill:#9C27B0,stroke:#333
-    style E fill:#F44336,stroke:#333
+```text
+ghost_architect_gemma3/
+├── docs/                     # Plan, architecture, PRD, AI rules, learning guide
+├── notebooks/
+│   └── main.ipynb            # Colab T4 main workflow
+├── configs/
+│   ├── training_config.yaml
+│   ├── model_config.yaml
+│   └── deployment_config.yaml
+├── data/
+│   ├── dataset.json
+│   ├── ui_screenshots/
+│   ├── synthetic_pairs/
+│   └── validation_set/
+├── src/
+│   ├── train.py
+│   ├── inference.py
+│   ├── data_processing.py
+│   ├── export.py
+│   ├── multimodal_model.py
+│   ├── synthetic_generator.py
+│   ├── models/
+│   ├── training/
+│   ├── data/
+│   └── api/
+├── scripts/                  # setup/export/deploy helpers
+├── tests/
+├── docker/
+├── .github/workflows/
+├── output/                   # adapters/checkpoints/gguf
+├── requirements.txt
+└── LICENSE
 ```
 
-## Methodology
+## Hardware Target
+- **Primary training target:** Google Colab T4 (16GB VRAM).
+- **Local 8GB GPUs:** use reduced settings (lower rank/seq length, disable DoRA).
 
-### Memory Management
-Standard 12B training requires ~24GB VRAM. We fit it on 16GB using:
-- Model Weights (4-bit QLoRA): ~7.6 GB
-- Gradients (Rank 64 + DoRA): ~5.5 GB
-- Context Overhead (4096 seq): ~2.5 GB
-- Total: ~15.6 GB (98% Capacity)
-
-## Risk Management
-
-### OOM Protocol
-If encountering "CUDA Out of Memory" errors:
-1. Lower Context: Change max_seq_length from 4096 → 2048
-2. Lower Rank: Change Rank from 64 → 32
-3. Disable DoRA: Set use_dora to False
-
-## Output Format
-
-Final model exported in GGUF format for local inference via Ollama:
-- Quantization: q4_k_m
-- Ready for deployment: `output/gguf/`
+## Docs You Should Follow
+- `docs/plan.md` → execution steps.
+- `docs/learning-guide.md` → concepts and reasoning.
+- `docs/architecture.md` → full structure reference.
+- `docs/prd.md` and `docs/ai_rules.md` → scope and quality guardrails.
 
 ## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT (see `LICENSE`).

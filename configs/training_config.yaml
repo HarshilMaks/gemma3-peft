@@ -1,0 +1,62 @@
+# Model Configuration
+model_name: "unsloth/gemma-3-12b-it-bnb-4bit"
+max_seq_length: 4096
+load_in_4bit: true
+
+# LoRA Configuration (Trinity Architecture)
+lora:
+  r: 64                    # Rank (learning capacity)
+  lora_alpha: 32          # Scaling factor
+  target_modules:         # Which layers to adapt
+    - "q_proj"
+    - "k_proj" 
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  use_rslora: true        # Enable rank-stabilized LoRA
+  use_dora: true          # Enable weight-decomposed adaptation
+  lora_dropout: 0.1
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Training Arguments
+training:
+  per_device_train_batch_size: 1      # MUST be 1 for 12B on T4
+  gradient_accumulation_steps: 4      # Simulates batch_size=4
+  num_train_epochs: 1                 # Usually enough
+  learning_rate: 2e-4                 # LoRA sweet spot
+  optimizer: "adamw_8bit"             # Memory-efficient optimizer
+  lr_scheduler_type: "cosine"         # Smooth decay
+  max_steps: 60                       # Prevent overtraining
+  warmup_steps: 10
+  logging_steps: 1
+  save_steps: 20
+  
+# Memory Management
+memory:
+  gradient_checkpointing: "unsloth"   # Critical for memory savings
+  fp16: true                          # Mixed precision
+  dataloader_num_workers: 0           # Avoid multiprocessing issues
+
+# Output Settings
+output:
+  output_dir: "./output/adapters"
+  save_total_limit: 3                 # Keep only 3 checkpoints
+  
+# OOM Recovery Protocol (apply in order if needed)
+oom_fallbacks:
+  - action: "reduce_seq_length"
+    from: 4096
+    to: 2048
+    memory_saved_gb: 3.0
+  - action: "reduce_rank"
+    from: 64
+    to: 32
+    memory_saved_gb: 2.0
+  - action: "disable_dora"
+    memory_saved_gb: 1.5
+  - action: "reduce_target_modules"
+    keep_only: ["q_proj", "v_proj"]
+    memory_saved_gb: 2.0

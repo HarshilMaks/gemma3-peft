@@ -32,7 +32,7 @@ graph TD
 ## 2. Project Structure
 
 ```
-gemma3-peft/
+ghost_architect_gemma3/
 ├── docs/                           # Documentation
 │   ├── architecture.md            # This file
 │   ├── plan.md                    # Implementation plan
@@ -106,11 +106,7 @@ gemma3-peft/
 │   └── deployment_config.yaml # Production deployment settings
 │
 ├── notebooks/                  # Jupyter notebooks
-│   ├── 01_environment_setup.ipynb     # Colab setup and validation
-│   ├── 02_trinity_training.ipynb      # Phase 1 training
-│   ├── 03_dataset_generation.ipynb    # Synthetic data creation
-│   ├── 04_multimodal_training.ipynb   # Phase 2 training
-│   └── 05_evaluation.ipynb            # Model evaluation
+│   └── main.ipynb             # Colab T4 main training workflow
 │
 ├── docker/                     # Container definitions
 │   ├── Dockerfile             # Production container
