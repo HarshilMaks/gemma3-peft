@@ -16,6 +16,7 @@ data/dataset.json
 *.log
 *.tmp
 *.tmp.*
+.github/
 
 # IDE
 .vscode/

@@ -18,7 +18,7 @@ help:
 	@echo "  make clean         - Remove Python cache files"
 
 venv:
-	$(UV) venv $(VENV)
+	@test -x $(PYTHON) || $(UV) venv
 
 install: venv
 	$(UV) pip install --python $(PYTHON) -r requirements.txt
