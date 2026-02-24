@@ -1,7 +1,5 @@
 # Ghost Architect: Gemma-3-12B Fine-Tuning Project
 
-**Tagline:** *Show me the UI, and I'll write the database.*
-
 ## Overview
 Ghost Architect is a progressive Gemma-3 engineering project with two stages:
 
