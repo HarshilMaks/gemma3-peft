@@ -405,11 +405,11 @@ core_dependencies:
   - unsloth==2026.1.4
   - transformers>=4.38.0
   - torch>=2.1.0
-  - xformers<0.0.27
   - peft>=0.7.0
-  - trl<0.9.0
+  - trl>=0.18.2,<=0.24.0,!=0.19.0
   - bitsandbytes>=0.41.0
   - accelerate>=0.25.0
+  # xformers is optional; do not force-install on Colab T4 if no wheel is available.
 ```
 
 ### 6.2 Production Deployment

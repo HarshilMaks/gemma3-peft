@@ -1,6 +1,7 @@
 # Virtual Environment
 .venv/
 .qodo/
+unsloth_compiled_cache/
 
 # Model Outputs
 output/

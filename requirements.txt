@@ -6,8 +6,8 @@ bitsandbytes>=0.41.0
 peft>=0.7.0
 trl>=0.7.0
 
-# Unsloth + xformers are installed in Colab via the notebook pip cells.
-# They are NOT listed here because xformers wheels are GPU/CUDA-specific
+# Unsloth is installed in Colab via the notebook pip cells.
+# xformers is intentionally not pinned here because its wheels are GPU/CUDA-specific
 # and uv cannot resolve them for a CPU-only local environment.
 
 # Data processing and utilities

@@ -49,7 +49,7 @@ def check_dependencies():
     # Keep unsloth first to avoid import-order warnings from patched libraries.
     required_packages = [
         'unsloth', 'torch', 'transformers', 'accelerate', 'bitsandbytes',
-        'peft', 'trl', 'xformers', 'datasets'
+        'peft', 'trl', 'datasets'
     ]
     
     missing_packages = []
@@ -64,7 +64,7 @@ def check_dependencies():
     
     if missing_packages:
         print(f"\n❌ Missing packages: {', '.join(missing_packages)}")
-        print("   Run: pip install -r requirements.txt")
+        print("   Run the dependency install cell in notebooks/main.ipynb")
         return False
     
     return True
@@ -83,7 +83,7 @@ def check_unsloth_compatibility():
         
     except ImportError as e:
         print(f"   ❌ Unsloth import failed: {e}")
-        print("   Install: pip install unsloth[colab-new]==2026.1.4")
+        print("   Install: pip install unsloth==2026.1.4")
         return False
     except Exception as e:
         print(f"   ⚠️  Unsloth imported with warnings: {e}")
