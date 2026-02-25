@@ -57,11 +57,13 @@ def run_vision_training(dataset_path: Path):
         load_in_4bit=True
     )
     
-    print("Applying Vision-Aware LoRA...")
+    print("Applying Full Trinity Architecture (QLoRA + DoRA + rsLoRA)...")
     peft_config = LoraConfig(
-        r=32, # Lower rank for T4 memory safety
-        lora_alpha=16,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+        r=64, # High rank for maximum capability
+        lora_alpha=32,
+        target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"], # Target all layers
+        use_dora=True,     # <--- TRINITY: Weight-Decomposed LoRA (Precision)
+        use_rslora=True,   # <--- TRINITY: Rank-Stabilized LoRA (Stability)
         bias="none",
         task_type="CAUSAL_LM"
     )
@@ -73,13 +75,14 @@ def run_vision_training(dataset_path: Path):
         output_dir="output/vision_adapters",
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
+        gradient_checkpointing=True, # <--- TRINITY MEMORY SAVER (Required for DoRA on T4)
         learning_rate=2e-4,
         max_steps=100,
         logging_steps=5,
         save_steps=50,
         optim="adamw_8bit",
         fp16=True,
-        remove_unused_columns=False, # CRITICAL for images
+        remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True}
     )
 
