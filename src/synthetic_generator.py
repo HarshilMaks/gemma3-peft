@@ -24,19 +24,24 @@ if not GEMINI_API_KEY:
     )
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Use Gemini 2.0 Flash (Latest, free tier available, excellent at vision)
-# If that fails, will fall back to gemini-1.5-flash
+# Use Gemini 2.5 Flash (Latest, fastest, best for vision tasks)
+# If that fails, will fall back to 2.0-flash → 1.5-flash → 1.5-pro
 try:
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    print("✅ Using gemini-2.0-flash")
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    print("✅ Using gemini-2.5-flash")
 except Exception as e:
-    print(f"⚠️  gemini-2.0-flash not available, trying gemini-1.5-flash: {e}")
+    print(f"⚠️  gemini-2.5-flash not available, trying gemini-2.0-flash: {e}")
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ Using gemini-1.5-flash")
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        print("✅ Using gemini-2.0-flash")
     except Exception as e2:
-        print(f"⚠️  gemini-1.5-flash not available, trying gemini-1.5-pro: {e2}")
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        print(f"⚠️  gemini-2.0-flash not available, trying gemini-1.5-flash: {e2}")
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            print("✅ Using gemini-1.5-flash")
+        except Exception as e3:
+            print(f"⚠️  gemini-1.5-flash not available, trying gemini-1.5-pro: {e3}")
+            model = genai.GenerativeModel('gemini-1.5-pro')
 
 SCREENSHOT_DIR = "data/ui_screenshots"
 DATASET_FILE = "data/dataset.json"
