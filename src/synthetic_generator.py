@@ -1,6 +1,7 @@
 """
 Ghost Architect: Synthetic Dataset Generator.
 Uses a Teacher Model (Gemini Vision) to generate SQL schemas from UI screenshots.
+Includes Smart Resume to save API limits.
 """
 import os
 import json
@@ -25,7 +26,6 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Use Gemini 2.5 Flash (Latest, fastest, best for vision tasks)
-# If that fails, will fall back to 2.0-flash → 1.5-flash → 1.5-pro
 try:
     model = genai.GenerativeModel('gemini-2.5-flash')
     print("✅ Using gemini-2.5-flash")
@@ -65,7 +65,7 @@ def generate_sql_for_image(image_path, verbose=False):
         # Send the prompt + image to Gemini
         response = model.generate_content([SYSTEM_PROMPT, img])
         
-        # Clean up the response (remove markdown code blocks if the AI adds them)
+        # Clean up the response
         sql_output = response.text.replace("```sql", "").replace("```postgresql", "").replace("```", "").strip()
         return sql_output
     except Exception as e:
@@ -74,7 +74,7 @@ def generate_sql_for_image(image_path, verbose=False):
             print(f"  ❌ ERROR: {error_msg}")
         # Only log key errors, skip rate limit errors
         if "429" not in error_msg and "quota" not in error_msg.lower():
-            print(f"  ⚠️  {image_path.split('/')[-1]}: {error_msg[:80]}")
+            print(f"  ⚠️  {os.path.basename(image_path)}: {error_msg[:80]}")
         return None
 
 def build_dataset():
@@ -86,18 +86,30 @@ def build_dataset():
     # Load existing dataset so we can resume if the script stops
     dataset = []
     if os.path.exists(DATASET_FILE):
-        with open(DATASET_FILE, "r") as f:
-            dataset = json.load(f)
-    
-    # Keep track of images we already processed
-    processed_images = {item.get("image_path") for item in dataset}
+        try:
+            with open(DATASET_FILE, "r", encoding="utf-8") as f:
+                dataset = json.load(f)
+        except json.JSONDecodeError:
+            print("⚠️  Warning: dataset.json was empty or corrupted. Starting fresh.")
+
+    # SMART RESUME: Keep track of images we already processed (Handles both keys)
+    processed_images = set()
+    for item in dataset:
+        img_val = item.get("image_path") or item.get("image")
+        if img_val:
+            # Normalize slashes just in case of OS differences
+            processed_images.add(img_val.replace("\\", "/"))
+            
+    print(f"🧠 Smart Resume: Skipping {len(processed_images)} images already generated...")
     
     # Get all PNG files
     image_files = list(Path(SCREENSHOT_DIR).glob("*.png"))
-    print(f"Found {len(image_files)} screenshots. Starting extraction...")
+    print(f"📁 Found {len(image_files)} total screenshots in folder.")
 
+    processed_this_session = 0
+    
     for img_path in image_files:
-        img_str_path = str(img_path)
+        img_str_path = str(img_path).replace("\\", "/")
         
         if img_str_path in processed_images:
             continue
@@ -109,28 +121,23 @@ def build_dataset():
             # Create the exact training format required for Gemma-3
             training_example = {
                 "instruction": "Analyze this UI screenshot and generate the PostgreSQL database schema required to support it.",
-                "input": "", # For multimodal, the input is technically the image
+                "input": "", 
                 "output": sql,
-                "image_path": img_str_path # We keep this reference for the multimodal dataloader later
+                "image_path": img_str_path 
             }
             
             dataset.append(training_example)
             
             # Save progressively so you don't lose data if it crashes
-            with open(DATASET_FILE, "w") as f:
+            with open(DATASET_FILE, "w", encoding="utf-8") as f:
                 json.dump(dataset, f, indent=2)
                 
-            print(f"  -> Success! Schema saved.")
+            processed_this_session += 1
+            print(f"  -> Success! Schema saved. ({processed_this_session} generated this run)")
             
-            # Sleep to avoid hitting free-tier API rate limits (15 requests/minute for free tier)
+            # Sleep to avoid hitting free-tier API rate limits (15 requests/minute)
             time.sleep(4) 
 
-if __name__ == "__main__":
-    import sys
-    
-    # Check if running in test mode
-    test_mode = "--test" in sys.argv
-    
 if __name__ == "__main__":
     import sys
     
@@ -150,14 +157,11 @@ if __name__ == "__main__":
             else:
                 print("❌ FAILED: No SQL generated")
                 print("\n💡 NOTE: Free tier Gemini API has quota limits (15 req/min, 1M tokens/day)")
-                print("   See API_QUOTA_GUIDE.md for solutions")
-                print("   Recommended: Skip Phase 2, focus on Phase 1 training instead (no API needed)")
         else:
             print(f"❌ No screenshots found in {SCREENSHOT_DIR}")
     else:
-        print("\n📊 FULL MODE: Processing all screenshots")
+        print("\n📊 FULL MODE: Processing screenshots")
         print(f"Run with --test flag to verify single screenshot first:")
         print(f"  uv run python src/synthetic_generator.py --test")
         print("\n⚠️  WARNING: This requires many API calls. Free tier has quota limits.")
-        print("   See API_QUOTA_GUIDE.md for alternatives.")
         build_dataset()

@@ -1,120 +1,113 @@
 """
-Bulletproof UI Screenshot Generator for Ghost Architect.
-Uses Playwright with Network-Idle waiting and Auto-Trashing of blank screens.
+The Omni-Scraper: Automated UI Screenshot Generator.
+Combines 2024+ GitHub API, Awesome-Dashboards, and Kaggle CSVs.
 """
 import os
+import re
 import time
 import requests
+import pandas as pd
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 from tqdm import tqdm
 
 # --- Configuration ---
-OUTPUT_DIR = "data/ui_screenshots"
-MAX_URLS = 1000  # Let's grab 1000 high-quality screens
-MIN_FILE_SIZE_KB = 40  # Anything under 40KB is usually a blank/broken screen
+CSV_FILES = [
+    "data/raw_csvs/saas_companies.csv",
+    "data/raw_csvs/ycombinator.csv",
+    "data/raw_csvs/producthunt.csv"
+]
+GITHUB_MD_URL = "https://raw.githubusercontent.com/obazoud/awesome-dashboard/master/README.md"
+OUTPUT_DIR = "data/ui_screenshots" # Unified folder for ALL images
+MAX_URLS = 2000
+MIN_FILE_SIZE_KB = 40
 
-def get_fresh_github_urls():
-    """Fetches paginated, modern URLs from GitHub API (2024+)."""
-    print(f"Fetching up to {MAX_URLS} fresh, modern URLs from GitHub API (2024+)...")
-    fresh_urls = set()
-    
-    search_queries = [
-        "topic:dashboard pushed:>2024-01-01",
-        "topic:admin-panel pushed:>2024-01-01",
-        "topic:saas pushed:>2024-01-01",
-        "topic:erp pushed:>2024-01-01"
-    ]
-    
+def clean_url(url):
+    """Filters out bad, local, or malformed URLs."""
+    if pd.isna(url) or not isinstance(url, str): return None
+    url = url.strip()
+    if any(x in url.lower() for x in [',', '\n', '\r', 'javascript:', 'data:', '<', '>']): return None
+    if not url.startswith('http'): url = 'https://' + url
+    if any(x in url.lower() for x in ['localhost', '127.0.0.1', '192.168.', '10.0.', ':8080']): return None
+    if not urlparse(url).netloc or '.' not in urlparse(url).netloc: return None
+    return url
+
+def get_api_urls():
+    """Fetches modern 2024+ URLs from GitHub API."""
+    print("Fetching fresh 2024+ URLs from GitHub API...")
+    urls = set()
+    queries = ["topic:dashboard pushed:>2024-01-01", "topic:admin-panel pushed:>2024-01-01", "topic:saas pushed:>2024-01-01"]
     headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "GhostArchitect"}
     
-    for query in search_queries:
-        print(f"\n  -> Searching GitHub for: {query}")
-        for page in range(1, 10):
+    for query in queries:
+        for page in range(1, 6):
             try:
-                url = f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page=100&page={page}"
-                response = requests.get(url, headers=headers)
-                
-                if response.status_code == 200:
-                    items = response.json().get("items", [])
-                    if not items:
-                        break 
-                        
-                    for item in items:
-                        homepage = item.get("homepage")
-                        if homepage and homepage.startswith("http") and "github.com" not in homepage:
-                            fresh_urls.add(homepage.strip())
-                elif response.status_code == 403:
-                    time.sleep(15) # Handle rate limit
-                else:
-                    break
-                    
-                time.sleep(6) # Wait between pages
-            except Exception:
-                pass
-            
-            if len(fresh_urls) >= MAX_URLS:
-                return list(fresh_urls)[:MAX_URLS]
-                
-    return list(fresh_urls)[:MAX_URLS]
+                resp = requests.get(f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page=100&page={page}", headers=headers)
+                if resp.status_code == 200:
+                    for item in resp.json().get("items", []):
+                        hp = item.get("homepage")
+                        if hp and hp.startswith("http") and "github.com" not in hp:
+                            urls.add(hp.strip())
+                elif resp.status_code == 403: time.sleep(10)
+                time.sleep(3)
+            except Exception: pass
+    return urls
+
+def get_legacy_urls():
+    """Fetches URLs from CSVs and Markdown."""
+    print("Fetching legacy URLs from CSVs and Markdown...")
+    urls = set()
+    try:
+        resp = requests.get(GITHUB_MD_URL)
+        if resp.status_code == 200:
+            found = re.findall(r'\[.*?\]\((https?://[^\)]+)\)', resp.text)
+            urls.update([u for u in found if "github.com" not in u and "twitter.com" not in u])
+    except Exception: pass
+
+    for csv_file in CSV_FILES:
+        if not os.path.exists(csv_file): continue
+        try:
+            df = pd.read_csv(csv_file, on_bad_lines='skip', low_memory=False)
+            url_col = next((col for col in df.columns if any(x in str(col).lower() for x in ['url', 'website', 'domain'])), None)
+            if url_col:
+                urls.update(df[url_col].apply(clean_url).dropna().tolist())
+        except Exception: pass
+    return urls
 
 def capture_screenshots(urls):
-    """Bulletproof Playwright scraper that waits for full rendering."""
+    """Bulletproof Playwright rendering."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    print(f"\nStarting Playwright to capture fully-rendered screenshots...")
+    print(f"\nStarting Playwright for {len(urls)} URLs...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Use a modern User-Agent to prevent basic bot-blocking
-        context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-        )
+        context = browser.new_context(viewport={'width': 1920, 'height': 1080})
         page = context.new_page()
         
-        success_count = 0
-        for url in tqdm(urls, desc="Snapping HD UIs"):
+        success = 0
+        for url in tqdm(urls, desc="Snapping UIs"):
             try:
                 domain = urlparse(url).netloc.replace("www.", "")
                 safe_name = "".join(c for c in domain if c.isalnum() or c in ".-_")
-                output_path = os.path.join(OUTPUT_DIR, f"{safe_name}_{abs(hash(url)) % 10000}.png")
+                output_path = os.path.join(OUTPUT_DIR, f"{safe_name}_{abs(hash(url)) % 100000}.png")
                 
-                if os.path.exists(output_path):
-                    continue
+                if os.path.exists(output_path): continue
                 
-                # CRITICAL FIX 1: Wait until the network is idle (API calls finished)
-                response = page.goto(url, timeout=25000, wait_until="networkidle")
-                
-                # CRITICAL FIX 2: Skip 404s and 500s
-                if not response or not response.ok:
-                    continue
-
-                # CRITICAL FIX 3: Hard wait for 3 seconds to let React/Vue animations paint
+                resp = page.goto(url, timeout=25000, wait_until="networkidle")
+                if not resp or not resp.ok: continue
                 page.wait_for_timeout(3000)
                 
-                # Remove popups
-                page.evaluate("""
-                    document.querySelectorAll('[id*="cookie"], [class*="cookie"], [id*="popup"], [id*="banner"]').forEach(el => el.remove());
-                """)
-                
+                page.evaluate("""document.querySelectorAll('[id*="cookie"], [id*="popup"]').forEach(el => el.remove());""")
                 page.screenshot(path=output_path)
                 
-                # CRITICAL FIX 4: Delete the image if it is too small (blank white/black screen)
-                file_size_kb = os.path.getsize(output_path) / 1024
-                if file_size_kb < MIN_FILE_SIZE_KB:
+                if os.path.getsize(output_path) / 1024 < MIN_FILE_SIZE_KB:
                     os.remove(output_path)
-                    continue # Skip counting this as a success
-                    
-                success_count += 1
-                
-            except Exception:
-                # Silently skip timeouts or sites with heavy anti-bot protection
-                pass
-                
+                    continue
+                success += 1
+            except Exception: pass
         browser.close()
-    print(f"\n✅ Finished! Captured {success_count} perfect HD screenshots to {OUTPUT_DIR}/")
+    print(f"\n✅ Finished! Captured {success} new screenshots.")
 
 if __name__ == "__main__":
-    target_urls = get_fresh_github_urls()
-    if target_urls:
-        capture_screenshots(target_urls)
+    final_urls = list(get_api_urls().union(get_legacy_urls()))[:MAX_URLS]
+    if final_urls: capture_screenshots(final_urls)
