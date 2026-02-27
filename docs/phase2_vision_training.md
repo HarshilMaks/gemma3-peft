@@ -287,7 +287,7 @@ response = chat(
 | `src/train_vision_prod.py` | Production-grade training script |
 | `data/dataset_vision.json` | Training annotations (136 examples) |
 | `HUGGINGFACE_AUTH.md` | HuggingFace setup guide |
-| `PHASE1_CHECKLIST.md` | Phase 1 text training (reference) |
+| `docs/phase1_trinity_training.md` | Phase 1 text training (reference) |
 
 ---
 
