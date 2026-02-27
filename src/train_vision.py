@@ -15,9 +15,9 @@ import logging
 from unsloth import FastVisionModel
 
 from transformers import TrainingArguments
-from peft import LoraConfig, get_peft_model
+from unsloth.trainer import UnslothVisionDataCollator
 from trl import SFTTrainer
-from datasets import Dataset, Image as DatasetsImage
+from datasets import Dataset, Sequence, Image as DatasetsImage
 
 from dotenv import load_dotenv
 from huggingface_hub import login
@@ -77,35 +77,40 @@ def load_vision_dataset(dataset_path: Path) -> Dataset:
     # Create the dataset
     ds = Dataset.from_list(valid_rows)
     
-    # CRITICAL FIX: Cast the column to HuggingFace Image type for Lazy Loading
-    # This prevents your RAM from exploding when training on hundreds of images
-    ds = ds.cast_column("images", DatasetsImage())
+    # CRITICAL FIX: Cast the list column to Sequence(Image) for lazy per-batch decoding.
+    # DatasetsImage() alone fails on list columns — Sequence wraps it correctly.
+    # HuggingFace will store paths and decode to PIL only when a batch is accessed.
+    ds = ds.cast_column("images", Sequence(DatasetsImage()))
     
     return ds
 
 # --- TRINITY ARCHITECTURE ---
-def get_trinity_config():
-    return LoraConfig(
-        r=64, 
-        lora_alpha=32, 
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM",
-        use_dora=True,      
-        use_rslora=True,    
-    )
-
 def create_vision_model():
     logger.info("Loading Gemma-3 vision model via Unsloth...")
-    
+
     model, processor = FastVisionModel.from_pretrained(
         model_name="google/gemma-3-12b-it",
         load_in_4bit=True,
         use_bnb_4bit_compute_dtype="float16",
     )
-    
-    model = get_peft_model(model, get_trinity_config())
+
+    # FastVisionModel.get_peft_model (not peft.get_peft_model) — required so
+    # Unsloth's custom CUDA kernels and memory optimizations apply correctly.
+    model = FastVisionModel.get_peft_model(
+        model,
+        finetune_vision_layers=True,
+        finetune_language_layers=True,
+        finetune_attention_modules=True,
+        finetune_mlp_modules=True,
+        r=64,           # High rank, stabilized by rsLoRA
+        lora_alpha=32,
+        lora_dropout=0.05,
+        bias="none",
+        random_state=42,
+        use_rslora=True,    # Rank-stabilized (prevents gradient collapse at r=64)
+        use_dora=True,      # Weight decomposition (magnitude + direction)
+    )
+
     logger.info(f"✅ Model loaded with Trinity adapters")
     return model, processor
 
@@ -114,21 +119,9 @@ def train_vision_model(dataset_path: Path, output_dir: str):
     dataset = load_vision_dataset(dataset_path)
     model, processor = create_vision_model()
     
-    # Format the dataset correctly for Unsloth Vision
+    # is_bfloat16_supported picks fp16 vs bf16 automatically based on GPU
     from unsloth import is_bfloat16_supported
-    from unsloth.chat_templates import get_chat_template
-    
-    processor = get_chat_template(
-        processor,
-        chat_template="gemma",
-    )
-    
-    def formatting_prompts_func(examples):
-        texts = [processor.apply_chat_template(msg, tokenize=False) for msg in examples["messages"]]
-        return {"text": texts, "images": examples["images"]}
-    
-    formatted_dataset = dataset.map(formatting_prompts_func, batched=True)
-    
+
     training_args = TrainingArguments(
         output_dir=output_dir,
         per_device_train_batch_size=1,
@@ -153,7 +146,10 @@ def train_vision_model(dataset_path: Path, output_dir: str):
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=formatted_dataset,
+        train_dataset=dataset,
+        # UnslothVisionDataCollator handles chat template application + image
+        # processing per-batch. Without this, SFTTrainer cannot handle vision inputs.
+        data_collator=UnslothVisionDataCollator(model, processor),
         processing_class=processor,
     )
     
