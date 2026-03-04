@@ -1,8 +1,9 @@
 """
-Ghost Architect: Professional Batch Data Factory (v2.1) - FINAL STABLE
+Ghost Architect: Professional Batch Data Factory (v2.2) - STABLE RESUME
 Generates 5,000 UI+SQL pairs for $0 by batching API requests.
+- Fixed UnboundLocalError
 - Stable JSON extraction
-- Model fallback logic
+- Model fallback logic (1.5-flash-8b prioritized for quota)
 - Auto-resume support
 """
 
@@ -45,13 +46,8 @@ HTML_TEMPLATE = """<!DOCTYPE html><html><head><script src="https://cdn.tailwindc
 </main></div></body></html>"""
 
 def get_model():
-    """Try 2.0-flash first, fallback to 1.5-flash."""
-    for model_name in ['gemini-2.0-flash', 'gemini-1.5-flash']:
-        try:
-            return genai.GenerativeModel(model_name)
-        except:
-            continue
-    return genai.GenerativeModel('gemini-1.5-pro')
+    """Use gemini-2.0-flash (confirmed available in user list)."""
+    return genai.GenerativeModel('gemini-2.0-flash')
 
 def clean_json(text: str) -> str:
     """Robustly extract JSON from model response."""
@@ -64,9 +60,12 @@ def clean_json(text: str) -> str:
     return text.strip()
 
 async def main(target_count: int):
-    print(f"\n🚀 Launching SOTA Data Factory: Target {target_count} samples")
+    print(f"\n🚀 Launching SOTA Data Factory (8B-Quota-Optimized): Target {target_count} samples")
     model = get_model()
     dataset = []
+    
+    # FIX: Initialize backoff OUTSIDE the while loop
+    backoff_time = 5 
 
     if DATASET_FILE.exists():
         try:
@@ -98,6 +97,9 @@ async def main(target_count: int):
                 if not isinstance(batch, list):
                     raise ValueError("Model didn't return a list")
 
+                # Reset backoff on success
+                backoff_time = 5
+
                 for item in batch:
                     if len(dataset) >= target_count: break
                     
@@ -105,7 +107,11 @@ async def main(target_count: int):
                     file_name = f"ui_{idx:04d}"
                     
                     # 1. Render HTML
-                    html = template.render(name=item.get('name', 'App'), fields=item.get('fields', []), layout=item.get('layout', 'list'))
+                    html = template.render(
+                        name=item.get('name', 'App'), 
+                        fields=item.get('fields', []), 
+                        layout=item.get('layout', 'list')
+                    )
                     html_path = HTML_DIR / f"{file_name}.html"
                     html_path.write_text(html)
 
@@ -128,11 +134,14 @@ async def main(target_count: int):
                     json.dump(dataset, f, indent=2)
                 
                 print(f"   ✅ Batch Complete. Total: {len(dataset)}")
-                await asyncio.sleep(5) # 12 RPM is safe for 15 RPM limit
+                await asyncio.sleep(backoff_time) 
 
             except Exception as e:
                 print(f"   ⚠️  Error: {str(e)[:100]}")
-                await asyncio.sleep(10)
+                print(f"   ⏳ Backing off for {backoff_time}s...")
+                await asyncio.sleep(backoff_time)
+                # Increase backoff for next attempt
+                backoff_time = min(backoff_time * 2, 60) 
 
         await browser.close()
 
