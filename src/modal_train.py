@@ -152,14 +152,13 @@ def _load_dataset(dataset_json: Path):
     },
     secrets=[modal.Secret.from_name("ghost-architect-secrets")],
 )
-def train():
+def train(dataset_filename: str = "dataset_vision.json"):
     import os
     import logging
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    # Point HuggingFace cache at the persistent volume so 12GB weights
-    # are only downloaded once (first run) and reused on every subsequent run.
+    # Point HuggingFace cache at the persistent volume
     os.environ["HF_HOME"]             = str(CACHE_PATH)
     os.environ["TRANSFORMERS_CACHE"]  = str(CACHE_PATH / "transformers")
     os.environ["HF_DATASETS_CACHE"]   = str(CACHE_PATH / "datasets")
@@ -170,15 +169,17 @@ def train():
     login(token=hf_token, add_to_git_credential=False)
     print("✅ HuggingFace authenticated")
 
-    # Apply DoRA patch before importing peft internals
+    # Apply DoRA patch
     _patch_dora()
 
-    # Unsloth MUST be imported before transformers
     from unsloth import FastVisionModel, is_bfloat16_supported
     from unsloth.trainer import UnslothVisionDataCollator
     from trl import SFTTrainer, SFTConfig
 
-    dataset_json = DATASET_PATH / "dataset_vision.json"
+    dataset_json = DATASET_PATH / dataset_filename
+    if not dataset_json.exists():
+        raise FileNotFoundError(f"Dataset {dataset_filename} not found in Modal volume. Run upload_dataset first.")
+        
     dataset = _load_dataset(dataset_json)
 
     print("Loading Gemma-3-12B-IT vision model...")
@@ -252,44 +253,56 @@ def train():
 
 # ── Upload Dataset ────────────────────────────────────────────────────────────
 @app.local_entrypoint()
-def upload_dataset():
+def upload_dataset(dataset_filename: str = "dataset_vision.json"):
     """
-    Upload dataset_vision.json + ui_screenshots/ to the Modal dataset volume.
-    Run once (or when dataset changes):  modal run src/modal_train.py::upload_dataset
+    Upload dataset JSON + ui_screenshots/ + synthetic_factory/ to Modal.
+    Run once (or when dataset changes):
+      modal run src/modal_train.py::upload_dataset --dataset-filename dataset_merged.json
     """
     import os
 
-    local_json       = Path("data/dataset_vision.json")
+    local_json = Path("data") / dataset_filename
+    
+    # Check both root data/ and synthetic_factory/ subfolder
+    if not local_json.exists():
+        local_json = Path("data/synthetic_factory/synthetic_dataset.json")
+
     local_screenshots = Path("data/ui_screenshots")
+    local_synthetic_screenshots = Path("data/synthetic_factory/screenshots")
 
     assert local_json.exists(), f"Missing {local_json}"
-    assert local_screenshots.exists(), f"Missing {local_screenshots}"
 
-    screenshots = list(local_screenshots.glob("*.png"))
-    print(f"Uploading dataset_vision.json + {len(screenshots)} screenshots (~107MB)...")
+    print(f"Uploading {dataset_filename}...")
     with dataset_vol.batch_upload() as batch:
-        batch.put_file(local_json, "dataset_vision.json")
-        batch.put_directory(local_screenshots, "ui_screenshots")
+        batch.put_file(local_json, dataset_filename)
+        
+        # Upload real screenshots if they exist
+        if local_screenshots.exists():
+            batch.put_directory(local_screenshots, "ui_screenshots")
+            
+        # Upload synthetic screenshots if they exist
+        if local_synthetic_screenshots.exists():
+            batch.put_directory(local_synthetic_screenshots, "ui_screenshots")
 
-    print(f"✅ Uploaded {len(screenshots)} images + dataset JSON to ghost-architect-dataset volume")
+    print(f"✅ Uploaded dataset JSON and all images to ghost-architect-dataset volume")
 
 
 # ── Download Adapter ─────────────────────────────────────────────────────────
 @app.local_entrypoint()
-def download_adapter():
+def download_adapter(adapter_name: str = "trinity_a10g"):
     """
     Download the trained adapter from Modal output volume to local output/.
     Run after training:  modal run src/modal_train.py::download_adapter
     """
-    local_out = Path("output/adapters/trinity_a10g")
+    local_out = Path("output/adapters") / adapter_name
     local_out.mkdir(parents=True, exist_ok=True)
 
-    print("Listing adapter files in Modal output volume...")
-    adapter_prefix = "adapters/trinity_a10g"
+    print(f"Listing adapter files in Modal output volume for {adapter_name}...")
+    adapter_prefix = f"adapters/{adapter_name}"
     files = list(output_vol.listdir(adapter_prefix, recursive=True))
 
     if not files:
-        print("❌ No adapter files found. Has training completed?")
+        print(f"❌ No adapter files found for {adapter_name}. Has training completed?")
         return
 
     print(f"Downloading {len(files)} files...")
@@ -300,14 +313,16 @@ def download_adapter():
             dest.write_bytes(f.read())
 
     print(f"✅ Adapter downloaded to {local_out}/")
-    print("Next step: python src/export.py --adapter_dir output/adapters/trinity_a10g --output_dir output/gguf")
 
 
 # ── Run Training ─────────────────────────────────────────────────────────────
 @app.local_entrypoint()
-def main():
-    """Default entrypoint: modal run src/modal_train.py"""
-    result = train.remote()
+def main(dataset_filename: str = "dataset_vision.json"):
+    """
+    Default entrypoint: 
+      modal run src/modal_train.py --dataset-filename dataset_vision.json
+    """
+    result = train.remote(dataset_filename=dataset_filename)
     print(f"\n🎉 Training complete!")
     print(f"   Adapter is in Modal Volume at: {result}")
-    print(f"   Download it: modal run src/modal_train.py::download_adapter")
+    print(f"   Download it: modal run src/modal_train.py::download_adapter --adapter-name trinity_a10g")
