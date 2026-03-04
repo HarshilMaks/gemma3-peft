@@ -1,7 +1,7 @@
 # Ghost Architect: Gemma-3-12B Fine-Tuning Project
 
 ## Overview
-Ghost Architect is a multimodal Gemma-3 fine-tuning project that converts UI screenshots into PostgreSQL database schemas.
+This is a multimodal Gemma-3 fine-tuning project that converts UI screenshots into PostgreSQL database schemas.
 
 - **Phase 1 (Foundation):** Trinity text fine-tuning on Colab T4 using **QLoRA + rsLoRA + DoRA**.
 - **Phase 2 (Vision):** Multimodal UI-to-SQL training on 287 screenshot–schema pairs, with two training paths (Modal A10G and Colab T4).
@@ -10,7 +10,7 @@ The pipeline goes: **train → test → export GGUF → run with Ollama**, plus 
 
 ## Trinity Architecture
 
-The training stack combines three methods for high quality under tight VRAM limits:
+The training stack combines three methods for high-quality under tight VRAM limits:
 
 1. **QLoRA (4-bit NF4 quantization)** — Compresses model weights so Gemma-3-12B fits on consumer GPUs.
 2. **rsLoRA (rank-stabilized scaling)** — Stabilizes high-rank adaptation and enables rank 64.
@@ -40,7 +40,7 @@ The training stack combines three methods for high quality under tight VRAM limi
 Apply in order if CUDA OOM occurs:
 1. Reduce `max_seq_length`: `4096 → 2048`
 2. Reduce LoRA rank: `64 → 32`
-3. Disable DoRA: `use_dora: false`
+3. Disable DoRA: `use_dora: false.`
 4. Reduce target modules to `["q_proj", "v_proj"]`
 
 ## Quick Start
@@ -54,7 +54,7 @@ make help
 ```
 
 ### 2) Colab T4 (free vision training)
-Use **`notebooks/main.ipynb`** — single notebook for runtime checks, dependency install, config, training, and GGUF export.
+Use **` notebooks/main.ipynb`** — single notebook for runtime checks, dependency install, config, training, and GGUF export.
 
 > CUDA-specific training dependencies (Unsloth/xformers) are installed inside the Colab notebook cells.
 
