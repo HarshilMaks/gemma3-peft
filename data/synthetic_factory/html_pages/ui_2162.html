@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-gray-50 p-8"><div class="max-w-4xl mx-auto bg-white shadow-xl rounded-xl overflow-hidden border">
+<header class="bg-indigo-600 px-6 py-4 text-white"><h1 class="text-2xl font-bold">Website Analytics Summary</h1></header>
+<main class="p-6"><div class="grid grid-cols-3 gap-4">
+<div class="p-4 border rounded-lg bg-gray-50"><p class="text-xs text-gray-400 uppercase font-bold">{'name': 'Current Active Users', 'type': 'metric', 'value_source': 'SUM(users_online)', 'table': 'traffic_log'}</p>
+<div class="h-4 bg-gray-200 rounded mt-2 w-3/4"></div></div><div class="p-4 border rounded-lg bg-gray-50"><p class="text-xs text-gray-400 uppercase font-bold">{'name': 'Page Views (Last 7 Days)', 'type': 'bar_chart', 'x_axis': 'day_of_week', 'y_axis': 'page_views_count', 'table': 'traffic_log', 'sort': 'date DESC'}</p>
+<div class="h-4 bg-gray-200 rounded mt-2 w-3/4"></div></div><div class="p-4 border rounded-lg bg-gray-50"><p class="text-xs text-gray-400 uppercase font-bold">{'name': 'Top Referral Sources', 'type': 'list', 'columns': ['source', 'sessions'], 'limit': 10, 'sort': 'sessions DESC', 'table': 'traffic_log'}</p>
+<div class="h-4 bg-gray-200 rounded mt-2 w-3/4"></div></div><div class="p-4 border rounded-lg bg-gray-50"><p class="text-xs text-gray-400 uppercase font-bold">{'name': 'Bounce Rate Trend', 'type': 'gauge_chart', 'value_source': '(SELECT AVG(bounce_rate) FROM analytics_summary WHERE date = CURRENT_DATE)', 'table': 'analytics_summary'}</p>
+<div class="h-4 bg-gray-200 rounded mt-2 w-3/4"></div></div><div class="p-4 border rounded-lg bg-gray-50"><p class="text-xs text-gray-400 uppercase font-bold">{'name': 'Geo-Location Map', 'type': 'map', 'latitude': 'latitude', 'longitude': 'longitude', 'intensity': 'sessions', 'table': 'traffic_log'}</p>
+<div class="h-4 bg-gray-200 rounded mt-2 w-3/4"></div></div></div>
+
+</main></div></body></html>
