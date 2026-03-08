@@ -1,0 +1,20 @@
+<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-gray-50 p-8"><div class="max-w-4xl mx-auto bg-white shadow-xl rounded-xl overflow-hidden border">
+<header class="bg-indigo-600 px-6 py-4 text-white"><h1 class="text-2xl font-bold">Hierarchical & Searchable</h1></header>
+<main class="p-6"><div class="space-y-4"><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'search_bar', 'placeholder': 'Search settings...'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'header', 'label': 'General'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'dropdown', 'label': 'App Language', 'options': ['English', 'German', 'Japanese'], 'default': 'English'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'dropdown', 'label': 'Default Browser', 'options': ['System Default', 'Chrome', 'Firefox', 'Edge'], 'default': 'System Default'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'radio', 'label': 'Startup Behavior', 'options': ['Start with OS', 'Manual'], 'default': 'Manual'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'header', 'label': 'Display'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'toggle', 'label': 'Theme', 'default': False, 'options': ['Light', 'Dark']}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'dropdown', 'label': 'Resolution', 'options': ['1920x1080', '2560x1440', '3840x2160'], 'default': '1920x1080', 'hidden_if': 'mobile'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'toggle', 'label': 'Show Animations', 'default': True}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'header', 'label': 'Notifications'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'section_link', 'label': 'Email Notifications', 'action': 'navigate_to_email_notifications'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'section_link', 'label': 'Push Notifications', 'action': 'navigate_to_push_notifications'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'header', 'label': 'Account'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'link', 'label': 'Profile Information', 'action': 'navigate_to_profile_info'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div><div class="flex items-center justify-between p-3 border-b">
+<span class="font-medium text-gray-700">{'type': 'link', 'label': 'Linked Accounts', 'action': 'navigate_to_linked_accounts'}</span><div class="h-6 w-24 bg-indigo-100 rounded"></div></div></div>
+</main></div></body></html>
