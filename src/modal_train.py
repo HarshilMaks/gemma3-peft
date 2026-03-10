@@ -107,10 +107,11 @@ def _load_dataset(dataset_json: Path):
     for item in parsed:
         # image_path in JSON was written as data/ui_screenshots/xxx.png (relative)
         # Inside the container it lives at /dataset/ui_screenshots/xxx.png
+        # BUT: synthetic data has paths like data/synthetic_factory/screenshots/ui_0000.png
+        # Fix: Extract filename and look in /dataset/ui_screenshots/ (where both are uploaded)
         raw_path = item.get("image_path") or item.get("image", "")
-        # Strip any leading "data/" prefix so it resolves relative to DATASET_PATH
-        rel = raw_path.replace("data/ui_screenshots/", "")
-        img_path = DATASET_PATH / "ui_screenshots" / rel
+        filename = Path(raw_path).name
+        img_path = DATASET_PATH / "ui_screenshots" / filename
 
         if not img_path.exists():
             skipped += 1
