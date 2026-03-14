@@ -157,4 +157,4 @@ ghost_architect_gemma3/
 - **No API layer** — project scope is train → test → export GGUF → run locally.
 
 ## License
-MIT (see `LICENSE`).
+MIT (see `LICENSE.md`).
