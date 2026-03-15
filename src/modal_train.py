@@ -28,7 +28,7 @@ from pathlib import Path
 # ── Persistent Volumes ──────────────────────────────────────────────────────
 # Volumes persist across Modal runs.
 # model_cache_vol saves the 12GB Gemma weights — avoids re-downloading every run.
-# dataset_vol holds your 287 screenshots + dataset_vision.json.
+# dataset_vol holds merged training assets (dataset_merged.json + screenshots).
 # output_vol holds the trained LoRA adapter.
 
 dataset_vol     = modal.Volume.from_name("ghost-architect-dataset",    create_if_missing=True)
@@ -145,7 +145,7 @@ def _load_dataset(dataset_json: Path):
 # ── Main Training Function ────────────────────────────────────────────────────
 @app.function(
     gpu="A10G",          # 24GB VRAM — enough for full Trinity including DoRA
-    timeout=7200,        # 2 hour cap (training ~1.5 hrs)
+    timeout=21600,       # 6 hour cap for full merged-dataset 3-epoch run
     volumes={
         DATASET_PATH: dataset_vol,
         CACHE_PATH:   model_cache_vol,
@@ -220,7 +220,7 @@ def train(dataset_filename: str = "dataset_merged.json"):
             output_dir=output_dir,
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,   # Effective batch = 8
-            num_train_epochs=3,              # 3 passes over 287 examples
+            num_train_epochs=3,              # 3 passes over full merged dataset
             learning_rate=2e-4,
             lr_scheduler_type="cosine",      # Cosine decay (better than linear for 3 epochs)
             warmup_ratio=0.1,
