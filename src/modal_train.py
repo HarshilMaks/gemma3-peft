@@ -50,9 +50,9 @@ image = (
         # Core ML stack — pin torch first so Unsloth picks the right CUDA variant
         "torch==2.4.1",
         "torchvision==0.19.1",
-        # Unsloth from source — gets latest Gemma3 patches
+        # Unsloth + Zoo from matching sources to avoid API mismatch (e.g. device_synchronize)
         "unsloth @ git+https://github.com/unslothai/unsloth.git",
-        "unsloth_zoo",
+        "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
         # Dependencies (pin to known-compatible stack to avoid runtime import drift)
         "transformers==4.51.3",
         "trl==0.15.2",
@@ -66,6 +66,9 @@ image = (
         "triton",
         "sentencepiece",
     )
+    # torchao 0.16+ expects newer torch symbols (e.g. torch.int1) and crashes with torch 2.4.1.
+    # Keep it out of the runtime so transformers/peft imports stay stable.
+    .run_commands("python -m pip uninstall -y torchao || true")
 )
 
 app = modal.App("ghost-architect-training", image=image)
