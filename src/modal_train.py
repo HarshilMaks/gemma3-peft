@@ -165,6 +165,7 @@ def train(dataset_filename: str = "dataset_merged.json", dry_run_limit: int = 0)
     os.environ["HF_DATASETS_CACHE"]   = str(CACHE_PATH / "datasets")
     # Force safer attention backend to avoid kernel NYI errors in SigLIP/Gemma3 vision path.
     os.environ["XFORMERS_DISABLED"]   = "1"
+    os.environ["DISABLE_FLEX_ATTENTION"] = "1"
 
     # Auth
     from huggingface_hub import login
@@ -198,8 +199,9 @@ def train(dataset_filename: str = "dataset_merged.json", dry_run_limit: int = 0)
 
     print("Loading Gemma-3-12B-IT vision model...")
     model, processor = FastVisionModel.from_pretrained(
-        model_name="google/gemma-3-12b-it",
+        model_name="unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
         load_in_4bit=True,   # QLoRA: 12B fits in 24GB with room for DoRA gradients
+        attn_implementation="eager",
     )
 
     # One-shot stability profile on A10G:
