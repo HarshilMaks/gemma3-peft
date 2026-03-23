@@ -347,24 +347,130 @@ def download_adapter(adapter_name: str = "trinity_a10g"):
     print(f"✅ Adapter downloaded to {local_out}/ (files: {downloaded}, skipped: {skipped})")
 
 
+# ── Inference output helpers ──────────────────────────────────────────────────
+def _strip_markdown_code_fence(text: str) -> str:
+    import re
+
+    stripped = text.strip()
+    fenced = re.match(r"^```[a-zA-Z0-9_+-]*\s*\n(.*?)\n```$", stripped, re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    return stripped
+
+
+def _split_mermaid_and_sql(text: str) -> tuple[str | None, str]:
+    marker_mermaid = "=== MERMAID ==="
+    marker_sql = "=== SQL ==="
+    if marker_mermaid in text and marker_sql in text:
+        after_mermaid = text.split(marker_mermaid, 1)[1]
+        mermaid_part, sql_part = after_mermaid.split(marker_sql, 1)
+        mermaid_part = _strip_markdown_code_fence(mermaid_part)
+        sql_part = _strip_markdown_code_fence(sql_part)
+        return (mermaid_part.strip() or None), sql_part.strip()
+    return None, _strip_markdown_code_fence(text)
+
+
+def _sql_to_mermaid_fallback(sql_text: str) -> str | None:
+    """
+    Build a basic Mermaid ER diagram from SQL when model does not return one.
+    """
+    import re
+
+    tables: list[tuple[str, list[tuple[str, str, str]]]] = []
+    relations: list[tuple[str, str, str]] = []
+
+    create_table_pattern = re.compile(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"]?(\w+)[`\"]?\s*\((.*?)\)\s*;",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    for match in create_table_pattern.finditer(sql_text):
+        table_name = match.group(1)
+        body = match.group(2)
+        columns: list[tuple[str, str, str]] = []
+
+        for raw_line in body.splitlines():
+            line = raw_line.strip().rstrip(",")
+            if not line:
+                continue
+
+            upper = line.upper()
+            if upper.startswith(("PRIMARY KEY", "UNIQUE", "CHECK", "CONSTRAINT")):
+                continue
+
+            if upper.startswith("FOREIGN KEY"):
+                fk_match = re.search(
+                    r"FOREIGN\s+KEY\s*\([`\"]?(\w+)[`\"]?\)\s*REFERENCES\s+[`\"]?(\w+)[`\"]?",
+                    line,
+                    re.IGNORECASE,
+                )
+                if fk_match:
+                    relations.append((table_name, fk_match.group(1), fk_match.group(2)))
+                continue
+
+            parts = line.split()
+            col_name = parts[0].strip('`"') if parts else "unknown_column"
+            col_type = parts[1] if len(parts) > 1 else "TEXT"
+            tags: list[str] = []
+
+            if "PRIMARY KEY" in upper:
+                tags.append("PK")
+
+            if "REFERENCES" in upper:
+                tags.append("FK")
+                ref_match = re.search(r"REFERENCES\s+[`\"]?(\w+)[`\"]?", line, re.IGNORECASE)
+                if ref_match:
+                    relations.append((table_name, col_name, ref_match.group(1)))
+
+            columns.append((col_type, col_name, ",".join(tags)))
+
+        if columns:
+            tables.append((table_name, columns))
+
+    if not tables:
+        return None
+
+    lines = ["erDiagram"]
+    for table_name, columns in tables:
+        lines.append(f"    {table_name.upper()} {{")
+        for col_type, col_name, tags in columns:
+            if tags:
+                lines.append(f'        {col_type} {col_name} "{tags}"')
+            else:
+                lines.append(f"        {col_type} {col_name}")
+        lines.append("    }")
+
+    for src, col, dst in relations:
+        lines.append(f'    {src.upper()} }}o--|| {dst.upper()} : "{col}"')
+
+    return "\n".join(lines)
+
+
 # ── Inference (test the adapter) ──────────────────────────────────────────────
 @app.function(
     gpu="A10G",
     timeout=3600,
     volumes={
+        DATASET_PATH: dataset_vol,
         CACHE_PATH:   model_cache_vol,
         OUTPUT_PATH:  output_vol,
     },
 )
 def run_inference(adapter_name: str, image_path: str):
     """Run inference on a test image using the trained adapter."""
-    import sys
+    import os
     from pathlib import Path
+    import torch
     from PIL import Image
     from unsloth import FastVisionModel
-    from peft import AutoPeftModelForCausalLM
-    
-    sys.path.insert(0, "/src")
+
+    # Match training stability settings for Gemma3 vision path.
+    os.environ["XFORMERS_DISABLED"] = "1"
+    os.environ["DISABLE_FLEX_ATTENTION"] = "1"
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "enable_math_sdp"):
+        torch.backends.cuda.enable_math_sdp(True)
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
     
     output_dir = OUTPUT_PATH / "adapters" / adapter_name
     if not output_dir.exists():
@@ -373,26 +479,17 @@ def run_inference(adapter_name: str, image_path: str):
     
     print(f"Loading adapter from {output_dir}...")
     model, processor = FastVisionModel.from_pretrained(
-        "unsloth/gemma-3-12b-it-bnb-4bit",
+        model_name=str(output_dir),
         load_in_4bit=True,
-        use_cache=True,
-        max_seq_length=2048,
-        device_map="auto",
+        attn_implementation="eager",
     )
-    
-    # Load the LoRA adapter
-    model = AutoPeftModelForCausalLM.from_pretrained(
-        str(output_dir),
-        model_name_or_path="unsloth/gemma-3-12b-it-bnb-4bit",
-        device_map="auto",
-    )
+    FastVisionModel.for_inference(model)
     
     # Check that image exists locally in dataset
-    from pathlib import Path as PathlibPath
-    local_image = PathlibPath(image_path)
+    local_image = Path(image_path)
     if not local_image.exists():
         # Try without data/ prefix
-        local_image = DATASET_PATH / "ui_screenshots" / PathlibPath(image_path).name
+        local_image = DATASET_PATH / "ui_screenshots" / Path(image_path).name
     
     if not local_image.exists():
         print(f"❌ Image not found: {image_path}")
@@ -401,38 +498,45 @@ def run_inference(adapter_name: str, image_path: str):
     print(f"Loading image: {local_image}")
     image = Image.open(local_image).convert("RGB")
     
-    # Prepare prompt
-    prompt = f"""Analyze this UI screenshot and generate a normalized SQL schema that describes the database backing this interface.
-
-Return ONLY valid SQL CREATE TABLE statements. Do not explain.
-
-CREATE TABLE"""
-    
-    # Process inputs
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image, "text": ""},
-                {"type": "text", "image": "", "text": prompt},
+                {"type": "image", "image": str(local_image), "text": ""},
+                {
+                    "type": "text",
+                    "image": "",
+                    "text": (
+                        "Analyze this UI screenshot and generate a production-grade database design.\n\n"
+                        "Return output in this exact format:\n"
+                        "=== MERMAID ===\n"
+                        "A valid Mermaid erDiagram with entities, columns, PK/FK tags, and relationships.\n\n"
+                        "=== SQL ===\n"
+                        "Valid PostgreSQL CREATE TABLE statements only.\n\n"
+                        "No explanation. No extra text outside these markers."
+                    ),
+                },
             ],
         }
     ]
-    
-    inputs = processor(messages, return_tensors="pt").to(model.device)
-    
-    # Generate
-    import torch
+
+    prompt = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True,
+    )
+    inputs = processor(
+        text=prompt, images=image, return_tensors="pt",
+    ).to("cuda" if torch.cuda.is_available() else "cpu")
+
     with torch.inference_mode():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=1024,
-            temperature=0.7,
-            top_p=0.9,
+            max_new_tokens=1200,
+            use_cache=True,
+            do_sample=False,
         )
-    
-    response = processor.decode(outputs[0], skip_special_tokens=True)
-    return response
+
+    full_text = processor.batch_decode(outputs, skip_special_tokens=True)[0]
+    return full_text.split("model\n")[-1].strip() or full_text
 
 
 @app.local_entrypoint()
@@ -441,6 +545,12 @@ def run_inference_local(adapter_name: str = "trinity_a10g", image_path: str = ""
     Test inference on a UI screenshot using a trained adapter.
     Usage:
       modal run src/modal_train.py::run_inference_local --adapter-name trinity_a10g --image-path data/ui_screenshots/paystack.co_44228.png
+
+    Saves outputs to:
+      output/inference/<image_stem>.mmd
+      output/inference/<image_stem>.mermaid.html
+      output/inference/<image_stem>.sql
+      output/inference/<image_stem>.raw.txt
     """
     if not image_path:
         import glob as glob_module
@@ -453,10 +563,66 @@ def run_inference_local(adapter_name: str = "trinity_a10g", image_path: str = ""
             return
     
     result = run_inference.remote(adapter_name=adapter_name, image_path=image_path)
-    if result:
-        print("\n" + "="*80)
-        print(result)
-        print("="*80)
+    if not result:
+        print("❌ Inference returned no output.")
+        return
+
+    mermaid_diagram, sql_text = _split_mermaid_and_sql(result)
+    if not mermaid_diagram:
+        mermaid_diagram = _sql_to_mermaid_fallback(sql_text)
+
+    out_dir = Path("output/inference")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(image_path).stem
+
+    raw_path = out_dir / f"{stem}.raw.txt"
+    sql_path = out_dir / f"{stem}.sql"
+    raw_path.write_text(result.strip() + "\n", encoding="utf-8")
+    sql_path.write_text(sql_text.strip() + "\n", encoding="utf-8")
+
+    print("\n" + "=" * 80)
+    if mermaid_diagram:
+        mermaid_path = out_dir / f"{stem}.mmd"
+        mermaid_path.write_text(mermaid_diagram.strip() + "\n", encoding="utf-8")
+
+        html_path = out_dir / f"{stem}.mermaid.html"
+        html_content = (
+            "<!doctype html>\n"
+            "<html>\n"
+            "<head>\n"
+            '  <meta charset="utf-8" />\n'
+            "  <title>Ghost Architect Mermaid Diagram</title>\n"
+            "  <style>body { font-family: sans-serif; padding: 24px; }</style>\n"
+            "</head>\n"
+            "<body>\n"
+            "  <h2>Ghost Architect ER Diagram</h2>\n"
+            '  <pre class="mermaid">\n'
+            + mermaid_diagram.strip()
+            + "\n  </pre>\n"
+            '  <script type="module">\n'
+            "    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';\n"
+            "    mermaid.initialize({ startOnLoad: true, theme: 'default' });\n"
+            "  </script>\n"
+            "</body>\n"
+            "</html>\n"
+        )
+        html_path.write_text(html_content, encoding="utf-8")
+
+        print("=== MERMAID ===")
+        print(mermaid_diagram.strip())
+        print("\n=== SQL ===")
+        print(sql_text.strip())
+        print("=" * 80)
+        print(f"Saved Mermaid text: {mermaid_path}")
+        print(f"Saved Mermaid HTML: {html_path}")
+    else:
+        print("=== SQL ===")
+        print(sql_text.strip())
+        print("=" * 80)
+        print("⚠️ Mermaid diagram was not generated.")
+
+    print(f"Saved SQL: {sql_path}")
+    print(f"Saved raw output: {raw_path}")
 
 
 # ── Run Training ─────────────────────────────────────────────────────────────
