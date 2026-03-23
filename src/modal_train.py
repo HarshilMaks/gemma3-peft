@@ -361,12 +361,18 @@ def _strip_markdown_code_fence(text: str) -> str:
 def _split_mermaid_and_sql(text: str) -> tuple[str | None, str]:
     marker_mermaid = "=== MERMAID ==="
     marker_sql = "=== SQL ==="
-    if marker_mermaid in text and marker_sql in text:
+    if marker_mermaid in text:
         after_mermaid = text.split(marker_mermaid, 1)[1]
-        mermaid_part, sql_part = after_mermaid.split(marker_sql, 1)
-        mermaid_part = _strip_markdown_code_fence(mermaid_part)
-        sql_part = _strip_markdown_code_fence(sql_part)
-        return (mermaid_part.strip() or None), sql_part.strip()
+        if marker_sql in after_mermaid:
+            mermaid_part, sql_part = after_mermaid.split(marker_sql, 1)
+            mermaid_part = _strip_markdown_code_fence(mermaid_part)
+            sql_part = _strip_markdown_code_fence(sql_part)
+            return (mermaid_part.strip() or None), sql_part.strip()
+
+        # Mermaid-only fallback: keep the diagram, leave SQL empty.
+        mermaid_part = _strip_markdown_code_fence(after_mermaid)
+        return mermaid_part.strip() or None, ""
+
     return None, _strip_markdown_code_fence(text)
 
 
@@ -444,6 +450,697 @@ def _sql_to_mermaid_fallback(sql_text: str) -> str | None:
         lines.append(f'    {src.upper()} }}o--|| {dst.upper()} : "{col}"')
 
     return "\n".join(lines)
+
+
+def _sanitize_mermaid_erdiagram(mermaid_text: str) -> str | None:
+    """
+    Normalize Mermaid ER output so duplicate entity blocks collapse into one valid diagram.
+
+    The model often repeats the same entity multiple times. Mermaid ER diagrams reject that,
+    so we merge columns per entity and infer simple FK relationships from *_id FK fields.
+    """
+    import re
+
+    text = _strip_markdown_code_fence(mermaid_text)
+    if "=== MERMAID ===" in text:
+        text = text.split("=== MERMAID ===", 1)[1]
+    if "=== SQL ===" in text:
+        text = text.split("=== SQL ===", 1)[0]
+
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    if lines[0].strip() == "erDiagram":
+        lines = lines[1:]
+
+    entity_order: list[str] = []
+    entities: dict[str, list[dict[str, object]]] = {}
+    explicit_relations: list[tuple[str, str, str, str]] = []
+
+    entity_header = re.compile(r"^([A-Za-z_][\w]*)\s*\{$")
+    relation_line = re.compile(r"^([A-Za-z_][\w]*)\s+([|}{o\-.]+)\s+([A-Za-z_][\w]*)\s*:\s*(.+)$")
+
+    current_entity: str | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+
+        header = entity_header.match(line)
+        if header:
+            current_entity = header.group(1)
+            if current_entity not in entities:
+                entities[current_entity] = []
+                entity_order.append(current_entity)
+            continue
+
+        if line == "}":
+            current_entity = None
+            continue
+
+        rel = relation_line.match(line)
+        if rel and current_entity is None:
+            explicit_relations.append(rel.groups())
+            continue
+
+        if current_entity is None:
+            continue
+
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+
+        col_type = parts[0]
+        col_name = parts[1]
+        rest = " ".join(parts[2:]).upper()
+        tags: list[str] = []
+        if "PK" in rest:
+            tags.append("PK")
+        if "FK" in rest:
+            tags.append("FK")
+        if "UNIQUE" in rest:
+            tags.append("UNIQUE")
+        if "NOT NULL" in rest or "NN" in rest:
+            tags.append("NN")
+
+        column_list = entities[current_entity]
+        existing = next((col for col in column_list if col["name"] == col_name), None)
+        if existing:
+            existing_tags = set(existing["tags"])  # type: ignore[index]
+            existing_tags.update(tags)
+            existing["tags"] = sorted(existing_tags)  # type: ignore[index]
+            if existing["type"] in {"string", "text", "?"} and col_type not in {"string", "text", "?"}:
+                existing["type"] = col_type  # type: ignore[index]
+        else:
+            column_list.append({"type": col_type, "name": col_name, "tags": tags})
+
+    if not entities:
+        return None
+
+    def to_entity_name(column_name: str) -> str:
+        base = column_name[:-3] if column_name.endswith("_id") else column_name
+        return "".join(part.capitalize() for part in base.split("_") if part)
+
+    relations: list[tuple[str, str, str, str]] = []
+    seen_relations: set[tuple[str, str, str, str]] = set()
+
+    for left, connector, right, label in explicit_relations:
+        key = (left, connector, right, label)
+        if key not in seen_relations:
+            relations.append((left, connector, right, label))
+            seen_relations.add(key)
+
+    for child_entity in entity_order:
+        for col in entities[child_entity]:
+            if "FK" not in col["tags"]:  # type: ignore[index]
+                continue
+            parent_candidate = to_entity_name(str(col["name"]))  # type: ignore[index]
+            parent_entity = next(
+                (entity for entity in entity_order if entity.lower() == parent_candidate.lower()),
+                None,
+            )
+            if not parent_entity or parent_entity == child_entity:
+                continue
+            key = (parent_entity, "||--o{", child_entity, str(col["name"]))  # type: ignore[index]
+            if key in seen_relations:
+                continue
+            relations.append(key)
+            seen_relations.add(key)
+
+    output: list[str] = ["erDiagram"]
+    for entity_name in entity_order:
+        output.append(f"    {entity_name} {{")
+        for col in entities[entity_name]:
+            tags = " ".join(col["tags"])  # type: ignore[index]
+            line = f"        {col['type']} {col['name']}"  # type: ignore[index]
+            if tags:
+                line += f" {tags}"
+            output.append(line)
+        output.append("    }")
+
+    for left, connector, right, label in relations:
+        output.append(f"    {left} {connector} {right} : {label}")
+
+    return "\n".join(output)
+
+
+
+def _parse_mermaid_erdiagram(mermaid_text: str) -> tuple[list[dict], list[dict]] | None:
+    """Parse a Mermaid ER diagram into structured entities and relationships."""
+    import re
+
+    text = _strip_markdown_code_fence(mermaid_text)
+    if "=== MERMAID ===" in text:
+        text = text.split("=== MERMAID ===", 1)[1]
+    if "=== SQL ===" in text:
+        text = text.split("=== SQL ===", 1)[0]
+
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    if lines[0].strip() == "erDiagram":
+        lines = lines[1:]
+
+    entity_header = re.compile(r"^([A-Za-z_][\w]*)\s*\{$")
+    relation_line = re.compile(r"^([A-Za-z_][\w]*)\s+([|}{o\-.]+)\s+([A-Za-z_][\w]*)\s*:\s*(.+)$")
+
+    entities: list[dict] = []
+    entity_map: dict[str, dict] = {}
+    relations: list[dict] = []
+    current_entity: str | None = None
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+
+        header = entity_header.match(line)
+        if header:
+            current_entity = header.group(1)
+            if current_entity not in entity_map:
+                entity = {"name": current_entity, "columns": []}
+                entity_map[current_entity] = entity
+                entities.append(entity)
+            continue
+
+        if line == "}":
+            current_entity = None
+            continue
+
+        rel = relation_line.match(line)
+        if rel and current_entity is None:
+            relations.append({
+                "left": rel.group(1),
+                "connector": rel.group(2),
+                "right": rel.group(3),
+                "label": rel.group(4).strip(),
+            })
+            continue
+
+        if current_entity is None:
+            continue
+
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+
+        col_type = parts[0]
+        col_name = parts[1].strip('`"')
+        rest = " ".join(parts[2:]).upper()
+        tags: list[str] = []
+        if "PK" in rest:
+            tags.append("PK")
+        if "FK" in rest:
+            tags.append("FK")
+        if "UNIQUE" in rest:
+            tags.append("UNIQUE")
+        if "NOT NULL" in rest or "NN" in rest:
+            tags.append("NN")
+
+        column_list = entity_map[current_entity]["columns"]
+        existing = next((col for col in column_list if col["name"] == col_name), None)
+        if existing:
+            existing_tags = set(existing["tags"])
+            existing_tags.update(tags)
+            existing["tags"] = sorted(existing_tags)
+            if existing["type"] in {"string", "text", "?"} and col_type not in {"string", "text", "?"}:
+                existing["type"] = col_type
+        else:
+            column_list.append({"type": col_type, "name": col_name, "tags": tags})
+
+    if not entities:
+        return None
+
+    return entities, relations
+
+
+def _build_mermaid_html(mermaid_diagram: str, title: str, source_text: str = "") -> str:
+    """Build a polished Mermaid preview with a rendered diagram and source blocks."""
+    import html as html_lib
+
+    safe_title = html_lib.escape(title)
+    safe_source = html_lib.escape(source_text.strip())
+    mermaid_source = _strip_markdown_code_fence(mermaid_diagram).strip()
+    safe_mermaid_source = html_lib.escape(mermaid_source)
+    diagram_source = safe_mermaid_source or "erDiagram\\n    %% No Mermaid diagram found."
+
+    mermaid_block = f"""
+        <details>
+          <summary>Show Mermaid source</summary>
+          <pre class="source-block">{safe_mermaid_source or "(empty)"}</pre>
+        </details>
+        """
+    raw_block = f"""
+        <details>
+          <summary>Show raw model output</summary>
+          <pre>{safe_source or "(empty)"}</pre>
+        </details>
+        """ if safe_source else ""
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_title}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --border: #dbe4ee;
+      --text: #0f172a;
+      --muted: #475569;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+    }}
+    body {{
+      margin: 0;
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    .page {{
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 24px;
+    }}
+    .header {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }}
+    .title {{
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }}
+    .subtitle {{
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }}
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.85);
+      font-size: 13px;
+      color: var(--muted);
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+    }}
+    .card {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }}
+    .card-head {{
+      padding: 18px 20px 0;
+    }}
+    .eyebrow {{
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #1d4ed8;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }}
+    .description {{
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }}
+    .diagram-wrap {{
+      margin: 18px 20px 0;
+      padding: 20px;
+      border: 1px solid #cbd5e1;
+      border-radius: 18px;
+      background: radial-gradient(circle at top left, #ffffff 0%, #f8fafc 100%);
+      overflow: auto;
+    }}
+    .diagram-wrap .mermaid {{
+      min-width: fit-content;
+    }}
+    .diagram-wrap svg {{
+      max-width: none !important;
+      height: auto !important;
+    }}
+    .source-block {{
+      margin: 0;
+      padding: 16px;
+      overflow-x: auto;
+      white-space: pre;
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #1e293b;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.55;
+    }}
+    details {{
+      border-top: 1px solid var(--border);
+      padding: 16px 20px 18px;
+      background: #f8fafc;
+    }}
+    details summary {{
+      cursor: pointer;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }}
+    details pre {{
+      margin: 0;
+      padding: 16px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid #dbe4ee;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.5;
+    }}
+    .footer-note {{
+      padding: 0 20px 20px;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <h1 class="title">{safe_title}</h1>
+        <p class="subtitle">Premium Mermaid ER diagram with the Mermaid source and raw model output preserved below.</p>
+      </div>
+      <div class="badge">Mermaid Diagram Representation · local file</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="eyebrow">Mermaid Diagram Representation</span>
+        <p class="description">The Mermaid source and raw model output preserved below</p>
+      </div>
+      <div class="diagram-wrap">
+        <div class="mermaid">
+{diagram_source}
+        </div>
+      </div>
+      {mermaid_block}
+      {raw_block}
+      <div class="footer-note">Use the Mermaid source above in any Mermaid renderer if you want to reuse or edit the diagram.</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {{
+      mermaid.initialize({{
+        startOnLoad: false,
+        theme: 'base',
+        securityLevel: 'loose',
+        darkMode: false,
+        er: {{
+          useMaxWidth: true,
+          layoutDirection: 'TB',
+          diagramPadding: 28
+        }},
+        themeVariables: {{
+          fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+          fontSize: '15px',
+          background: '#f8fafc',
+          primaryColor: '#eff6ff',
+          primaryTextColor: '#0f172a',
+          primaryBorderColor: '#60a5fa',
+          secondaryColor: '#f8fafc',
+          secondaryTextColor: '#0f172a',
+          secondaryBorderColor: '#cbd5e1',
+          tertiaryColor: '#ffffff',
+          tertiaryTextColor: '#0f172a',
+          noteBkgColor: '#ecfeff',
+          noteTextColor: '#0f172a',
+          noteBorderColor: '#67e8f9',
+          lineColor: '#64748b',
+          textColor: '#0f172a'
+        }}
+      }});
+      mermaid.run({{ querySelector: '.mermaid' }});
+    }});
+  </script>
+</body>
+</html>
+"""
+
+# ── Inference output helpers ──────────────────────────────────────────────────
+def _strip_markdown_code_fence(text: str) -> str:
+    import re
+
+    stripped = text.strip()
+    fenced = re.match(r"^```[a-zA-Z0-9_+-]*\s*\n(.*?)\n```$", stripped, re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    return stripped
+
+
+def _split_mermaid_and_sql(text: str) -> tuple[str | None, str]:
+    marker_mermaid = "=== MERMAID ==="
+    marker_sql = "=== SQL ==="
+    if marker_mermaid in text:
+        after_mermaid = text.split(marker_mermaid, 1)[1]
+        if marker_sql in after_mermaid:
+            mermaid_part, sql_part = after_mermaid.split(marker_sql, 1)
+            mermaid_part = _strip_markdown_code_fence(mermaid_part)
+            sql_part = _strip_markdown_code_fence(sql_part)
+            return (mermaid_part.strip() or None), sql_part.strip()
+
+        # Mermaid-only fallback: keep the diagram, leave SQL empty.
+        mermaid_part = _strip_markdown_code_fence(after_mermaid)
+        return mermaid_part.strip() or None, ""
+
+    return None, _strip_markdown_code_fence(text)
+
+
+def _sql_to_mermaid_fallback(sql_text: str) -> str | None:
+    """
+    Build a basic Mermaid ER diagram from SQL when model does not return one.
+    """
+    import re
+
+    tables: list[tuple[str, list[tuple[str, str, str]]]] = []
+    relations: list[tuple[str, str, str]] = []
+
+    create_table_pattern = re.compile(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"]?(\w+)[`\"]?\s*\((.*?)\)\s*;",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    for match in create_table_pattern.finditer(sql_text):
+        table_name = match.group(1)
+        body = match.group(2)
+        columns: list[tuple[str, str, str]] = []
+
+        for raw_line in body.splitlines():
+            line = raw_line.strip().rstrip(",")
+            if not line:
+                continue
+
+            upper = line.upper()
+            if upper.startswith(("PRIMARY KEY", "UNIQUE", "CHECK", "CONSTRAINT")):
+                continue
+
+            if upper.startswith("FOREIGN KEY"):
+                fk_match = re.search(
+                    r"FOREIGN\s+KEY\s*\([`\"]?(\w+)[`\"]?\)\s*REFERENCES\s+[`\"]?(\w+)[`\"]?",
+                    line,
+                    re.IGNORECASE,
+                )
+                if fk_match:
+                    relations.append((table_name, fk_match.group(1), fk_match.group(2)))
+                continue
+
+            parts = line.split()
+            col_name = parts[0].strip('`"') if parts else "unknown_column"
+            col_type = parts[1] if len(parts) > 1 else "TEXT"
+            tags: list[str] = []
+
+            if "PRIMARY KEY" in upper:
+                tags.append("PK")
+
+            if "REFERENCES" in upper:
+                tags.append("FK")
+                ref_match = re.search(r"REFERENCES\s+[`\"]?(\w+)[`\"]?", line, re.IGNORECASE)
+                if ref_match:
+                    relations.append((table_name, col_name, ref_match.group(1)))
+
+            columns.append((col_type, col_name, ",".join(tags)))
+
+        if columns:
+            tables.append((table_name, columns))
+
+    if not tables:
+        return None
+
+    lines = ["erDiagram"]
+    for table_name, columns in tables:
+        lines.append(f"    {table_name.upper()} {{")
+        for col_type, col_name, tags in columns:
+            if tags:
+                lines.append(f'        {col_type} {col_name} "{tags}"')
+            else:
+                lines.append(f"        {col_type} {col_name}")
+        lines.append("    }")
+
+    for src, col, dst in relations:
+        lines.append(f'    {src.upper()} }}o--|| {dst.upper()} : "{col}"')
+
+    return "\n".join(lines)
+
+
+def _sanitize_mermaid_erdiagram(mermaid_text: str) -> str | None:
+    """
+    Normalize Mermaid ER output so duplicate entity blocks collapse into one valid diagram.
+
+    The model often repeats the same entity multiple times. Mermaid ER diagrams reject that,
+    so we merge columns per entity and infer simple FK relationships from *_id FK fields.
+    """
+    import re
+
+    text = _strip_markdown_code_fence(mermaid_text)
+    if "=== MERMAID ===" in text:
+        text = text.split("=== MERMAID ===", 1)[1]
+    if "=== SQL ===" in text:
+        text = text.split("=== SQL ===", 1)[0]
+
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    if lines[0].strip() == "erDiagram":
+        lines = lines[1:]
+
+    entity_order: list[str] = []
+    entities: dict[str, list[dict[str, object]]] = {}
+    explicit_relations: list[tuple[str, str, str, str]] = []
+
+    entity_header = re.compile(r"^([A-Za-z_][\w]*)\s*\{$")
+    relation_line = re.compile(r"^([A-Za-z_][\w]*)\s+([|}{o\-.]+)\s+([A-Za-z_][\w]*)\s*:\s*(.+)$")
+
+    current_entity: str | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+
+        header = entity_header.match(line)
+        if header:
+            current_entity = header.group(1)
+            if current_entity not in entities:
+                entities[current_entity] = []
+                entity_order.append(current_entity)
+            continue
+
+        if line == "}":
+            current_entity = None
+            continue
+
+        rel = relation_line.match(line)
+        if rel and current_entity is None:
+            explicit_relations.append(rel.groups())
+            continue
+
+        if current_entity is None:
+            continue
+
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+
+        col_type = parts[0]
+        col_name = parts[1]
+        rest = " ".join(parts[2:]).upper()
+        tags: list[str] = []
+        if "PK" in rest:
+            tags.append("PK")
+        if "FK" in rest:
+            tags.append("FK")
+        if "UNIQUE" in rest:
+            tags.append("UNIQUE")
+        if "NOT NULL" in rest or "NN" in rest:
+            tags.append("NN")
+
+        column_list = entities[current_entity]
+        existing = next((col for col in column_list if col["name"] == col_name), None)
+        if existing:
+            existing_tags = set(existing["tags"])  # type: ignore[index]
+            existing_tags.update(tags)
+            existing["tags"] = sorted(existing_tags)  # type: ignore[index]
+            if existing["type"] in {"string", "text", "?"} and col_type not in {"string", "text", "?"}:
+                existing["type"] = col_type  # type: ignore[index]
+        else:
+            column_list.append({"type": col_type, "name": col_name, "tags": tags})
+
+    if not entities:
+        return None
+
+    def to_entity_name(column_name: str) -> str:
+        base = column_name[:-3] if column_name.endswith("_id") else column_name
+        return "".join(part.capitalize() for part in base.split("_") if part)
+
+    relations: list[tuple[str, str, str, str]] = []
+    seen_relations: set[tuple[str, str, str, str]] = set()
+
+    for left, connector, right, label in explicit_relations:
+        key = (left, connector, right, label)
+        if key not in seen_relations:
+            relations.append((left, connector, right, label))
+            seen_relations.add(key)
+
+    for child_entity in entity_order:
+        for col in entities[child_entity]:
+            if "FK" not in col["tags"]:  # type: ignore[index]
+                continue
+            parent_candidate = to_entity_name(str(col["name"]))  # type: ignore[index]
+            parent_entity = next(
+                (entity for entity in entity_order if entity.lower() == parent_candidate.lower()),
+                None,
+            )
+            if not parent_entity or parent_entity == child_entity:
+                continue
+            key = (parent_entity, "||--o{", child_entity, str(col["name"]))  # type: ignore[index]
+            if key in seen_relations:
+                continue
+            relations.append(key)
+            seen_relations.add(key)
+
+    output: list[str] = ["erDiagram"]
+    for entity_name in entity_order:
+        output.append(f"    {entity_name} {{")
+        for col in entities[entity_name]:
+            tags = " ".join(col["tags"])  # type: ignore[index]
+            line = f"        {col['type']} {col['name']}"  # type: ignore[index]
+            if tags:
+                line += f" {tags}"
+            output.append(line)
+        output.append("    }")
+
+    for left, connector, right, label in relations:
+        output.append(f"    {left} {connector} {right} : {label}")
+
+    return "\n".join(output)
 
 
 # ── Inference (test the adapter) ──────────────────────────────────────────────
@@ -568,6 +1265,10 @@ def run_inference_local(adapter_name: str = "trinity_a10g", image_path: str = ""
         return
 
     mermaid_diagram, sql_text = _split_mermaid_and_sql(result)
+    if mermaid_diagram:
+        sanitized_mermaid = _sanitize_mermaid_erdiagram(mermaid_diagram)
+        if sanitized_mermaid:
+            mermaid_diagram = sanitized_mermaid
     if not mermaid_diagram:
         mermaid_diagram = _sql_to_mermaid_fallback(sql_text)
 
@@ -578,7 +1279,8 @@ def run_inference_local(adapter_name: str = "trinity_a10g", image_path: str = ""
     raw_path = out_dir / f"{stem}.raw.txt"
     sql_path = out_dir / f"{stem}.sql"
     raw_path.write_text(result.strip() + "\n", encoding="utf-8")
-    sql_path.write_text(sql_text.strip() + "\n", encoding="utf-8")
+    sql_output = sql_text.strip() or "-- SQL section was not generated by the model output."
+    sql_path.write_text(sql_output + "\n", encoding="utf-8")
 
     print("\n" + "=" * 80)
     if mermaid_diagram:
@@ -586,38 +1288,25 @@ def run_inference_local(adapter_name: str = "trinity_a10g", image_path: str = ""
         mermaid_path.write_text(mermaid_diagram.strip() + "\n", encoding="utf-8")
 
         html_path = out_dir / f"{stem}.mermaid.html"
-        html_content = (
-            "<!doctype html>\n"
-            "<html>\n"
-            "<head>\n"
-            '  <meta charset="utf-8" />\n'
-            "  <title>Ghost Architect Mermaid Diagram</title>\n"
-            "  <style>body { font-family: sans-serif; padding: 24px; }</style>\n"
-            "</head>\n"
-            "<body>\n"
-            "  <h2>Ghost Architect ER Diagram</h2>\n"
-            '  <pre class="mermaid">\n'
-            + mermaid_diagram.strip()
-            + "\n  </pre>\n"
-            '  <script type="module">\n'
-            "    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';\n"
-            "    mermaid.initialize({ startOnLoad: true, theme: 'default' });\n"
-            "  </script>\n"
-            "</body>\n"
-            "</html>\n"
+        html_path.write_text(
+            _build_mermaid_html(
+                mermaid_diagram,
+                title="Ghost Architect Mermaid Diagram",
+                source_text=result,
+            ),
+            encoding="utf-8",
         )
-        html_path.write_text(html_content, encoding="utf-8")
 
         print("=== MERMAID ===")
         print(mermaid_diagram.strip())
         print("\n=== SQL ===")
-        print(sql_text.strip())
+        print(sql_output)
         print("=" * 80)
         print(f"Saved Mermaid text: {mermaid_path}")
         print(f"Saved Mermaid HTML: {html_path}")
     else:
         print("=== SQL ===")
-        print(sql_text.strip())
+        print(sql_output)
         print("=" * 80)
         print("⚠️ Mermaid diagram was not generated.")
 
