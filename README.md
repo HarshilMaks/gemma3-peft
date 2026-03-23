@@ -6,7 +6,7 @@ This is a multimodal Gemma-3 fine-tuning project that converts UI screenshots in
 - **Phase 1 (Foundation):** Trinity text fine-tuning on Colab T4 using **QLoRA + rsLoRA + DoRA**.
 - **Phase 2 (Vision):** Multimodal UI-to-SQL training on 287 screenshot–schema pairs, with two training paths (Modal A10G and Colab T4).
 
-The pipeline goes: **train → test → export GGUF → run with Ollama**, plus a Streamlit app (`src/app.py`) for interactive demos.
+The pipeline goes: **train → test → export GGUF + Modelfile → run with Ollama**, plus a Streamlit app (`src/app.py`) for interactive demos.
 
 ## Trinity Architecture
 
@@ -85,7 +85,7 @@ make install        # install dependencies with uv
 make validate       # environment/GPU validation
 make dataset-check  # validate data/dataset.json
 make train          # run src/train.py with config + dataset
-make export         # run src/export.py (GGUF export for Ollama)
+make export         # run src/export.py (GGUF export + Ollama Modelfile)
 make test           # run pytest
 make clean          # remove Python cache files
 ```
@@ -162,7 +162,7 @@ ghost_architect_gemma3/
 ## Current Status
 - **Phase 1** (text fine-tuning): Complete. `src/train.py` + `configs/training_config.yaml` + 30-example starter dataset.
 - **Phase 2** (vision training): Built. Two training scripts (`src/modal_train.py` for Modal A10G, `src/train_vision.py` for Colab T4), 287-example vision dataset, Streamlit demo app, CLI inference.
-- **Export**: `src/export.py` converts adapters to GGUF for Ollama.
+- **Export**: `src/export.py` converts adapters to GGUF for Ollama and writes `output/gguf/Modelfile`.
 - **No API layer** — project scope is train → test → export GGUF → run locally.
 
 ## License

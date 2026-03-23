@@ -92,7 +92,7 @@ def _resolve_adapter_path(adapter_dir: str) -> Path:
     candidates = _candidate_adapter_paths(adapter_dir)
     for candidate in candidates:
         if _is_adapter_directory(candidate):
-            return candidate
+            return candidate.resolve()
 
     candidate_list = "\n  - ".join(str(candidate) for candidate in candidates)
     raise FileNotFoundError(

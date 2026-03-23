@@ -22,7 +22,10 @@ After training (Phase 1 text or Phase 2 vision), deploy the model locally via GG
 
 ```bash
 python src/export.py
-# Outputs to output/gguf/
+# Outputs:
+#   output/gguf/ghost-architect-v1.gguf
+#   output/gguf/Modelfile
+#   output/gguf/export-manifest.json
 ```
 
 Or use the Makefile:
@@ -30,28 +33,14 @@ Or use the Makefile:
 make export
 ```
 
+> The GGUF bundle is the Ollama deployment artifact. For screenshot-based inference, keep using `src/app.py` and `src/inference.py`, which preserve the vision processor path.
+
 ---
 
 ## Step 2: Register Model with Ollama
 
 ```bash
-# Create the Modelfile
-cat > Modelfile << 'EOF'
-FROM ./output/gguf/ghost-architect-v1.gguf
-
-PARAMETER temperature 0.3
-PARAMETER top_p 0.9
-PARAMETER num_ctx 4096
-
-SYSTEM """You are Ghost Architect — an expert in UI analysis and PostgreSQL schema design.
-When given a screenshot of a UI (dashboard, e-commerce, admin panel, etc.),
-you output a complete, normalized PostgreSQL schema with proper data types,
-primary keys, foreign keys, and indexes.
-Output only valid SQL. No explanations unless asked."""
-EOF
-
-# Register and test
-ollama create ghost-architect -f Modelfile
+ollama create ghost-architect -f output/gguf/Modelfile
 ollama run ghost-architect "Hello — are you ready?"
 ```
 
@@ -87,7 +76,7 @@ The `docker/` directory is reserved for future containerized deployment. Current
 
 - [ ] Adapter weights exist: `output/adapters/`
 - [ ] GGUF exported: `python src/export.py`
-- [ ] Ollama model registered: `ollama create ghost-architect -f Modelfile`
+- [ ] Ollama model registered: `ollama create ghost-architect -f output/gguf/Modelfile`
 - [ ] Ollama tested: `ollama run ghost-architect`
 - [ ] Streamlit demo works: `streamlit run src/app.py`
 - [ ] CLI inference works: `python src/inference.py`
