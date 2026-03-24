@@ -204,13 +204,12 @@ def train(dataset_filename: str = "dataset_merged.json", dry_run_limit: int = 0)
         attn_implementation="eager",
     )
 
-    # One-shot stability profile on A10G:
-    # - finetune_vision_layers=False → lower VRAM pressure and fewer dtype edge cases
-    # - use_dora=True                → DoRA dtype bug patched above
-    # - use_rslora=True              → stabilizes rank 64 training
+    # Full Trinity stack on A10G: QLoRA + DoRA + rsLoRA
+    # A10G supports bf16 natively, so no dtype edge cases.
+    # Vision layers are fine-tuned to improve screenshot encoding quality.
     model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers=False,     # safer for single-run reliability
+        finetune_vision_layers=True,      # A10G can handle it + bf16 support
         finetune_language_layers=True,
         finetune_attention_modules=True,
         finetune_mlp_modules=True,
@@ -222,7 +221,7 @@ def train(dataset_filename: str = "dataset_merged.json", dry_run_limit: int = 0)
         use_rslora=True,         # Stabilizes rank 64 — prevents gradient collapse
         use_dora=True,           # Weight decomposition: magnitude + direction
     )
-    print("✅ Model loaded with full Trinity (QLoRA + DoRA + rsLoRA)")
+    print("✅ Model loaded with full Trinity (QLoRA + DoRA + rsLoRA + Vision Fine-tuning)")
 
     output_dir = str(OUTPUT_PATH / "adapters" / "trinity_a10g")
 
@@ -693,7 +692,7 @@ def _build_mermaid_html(mermaid_diagram: str, title: str, source_text: str = "")
     raw_block = f"""
         <details>
           <summary>Show raw model output</summary>
-          <pre>{safe_source or "(empty)"}</pre>
+          <pre class="source-block">{safe_source or "(empty)"}</pre>
         </details>
         """ if safe_source else ""
 
@@ -788,15 +787,21 @@ def _build_mermaid_html(mermaid_diagram: str, title: str, source_text: str = "")
       padding: 20px;
       border: 1px solid #cbd5e1;
       border-radius: 18px;
-      background: radial-gradient(circle at top left, #ffffff 0%, #f8fafc 100%);
+      background: linear-gradient(180deg, #eef2ff 0%, #f8fafc 52%, #e2e8f0 100%);
       overflow: auto;
     }}
     .diagram-wrap .mermaid {{
       min-width: fit-content;
+      padding: 12px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(248,250,252,0.92) 100%);
     }}
     .diagram-wrap svg {{
       max-width: none !important;
       height: auto !important;
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%) !important;
+      border-radius: 16px;
+      box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
     }}
     .source-block {{
       margin: 0;
@@ -827,9 +832,9 @@ def _build_mermaid_html(mermaid_diagram: str, title: str, source_text: str = "")
       overflow-x: auto;
       white-space: pre-wrap;
       word-break: break-word;
-      background: #ffffff;
-      color: #0f172a;
-      border: 1px solid #dbe4ee;
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #1e293b;
       border-radius: 14px;
       font-size: 13px;
       line-height: 1.5;
@@ -883,7 +888,7 @@ def _build_mermaid_html(mermaid_diagram: str, title: str, source_text: str = "")
         themeVariables: {{
           fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
           fontSize: '15px',
-          background: '#f8fafc',
+          background: '#eef2ff',
           primaryColor: '#eff6ff',
           primaryTextColor: '#0f172a',
           primaryBorderColor: '#60a5fa',
